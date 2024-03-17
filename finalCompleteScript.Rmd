@@ -1,0 +1,530 @@
+---
+title: "Final Project - Brazilian Riots"
+author: "Group 4"
+date: '2023-03-30'
+output: html_document
+---
+
+#Research Goal
+In this project, the group is looking to explore how sentiment and topics change based on geographical region.
+
+#Importing Related Packages
+```{r include=FALSE}
+library(tidyverse)
+library(tidytext) 
+library(dplyr)
+library(readr)
+library(stringr)
+library(text2vec)
+library(tm)
+library(qdapRegex)
+library(stopwords)
+library(furrr)
+library(stm)
+library(wordcloud2)
+library(sqldf)
+library(textdata)
+library(scales)
+plan(multisession)
+
+```
+
+
+
+#Uploading the data
+
+```{r include=FALSE}
+data_1 <- read_csv("/Users/matthewschultz/Big_Data_Lab/graph_test/data_for_brazil/Scacco Projects_Jan1To6.csv")
+data_1 <- data_1[, c("Date", "Title", "Language", "Author", "Twitter Followers", "Checked", "City", "Gender", "Impressions")]
+
+data_2 <- read_csv("/Users/matthewschultz/Big_Data_Lab/graph_test/data_for_brazil/Scacco Projects_Jan6To10.csv")
+data_2 <- data_2[, c("Date", "Title", "Language", "Author", "Twitter Followers", "Checked", "City", "Gender", "Impressions")]
+```
+
+##Selecting Data
+
+Originally, the data set included 68,000 rows and 116 columns. The group decided to filter the data to 10 columns, "Date", "Title", "Language", "Author", "Twitter Followers", "Checked", "City", "Gender", "Impressions", because we wanted to only have the most relevant data. Then, we decided to filter to filter the data to english because we had no reliable way to translate the Portuguese words into English.
+
+- The Date column represented when the tweets was posted
+- The Title Column represents the text in the Tweet
+- The Language Column represents the language encoded in the tweet.
+- The Author Column represents who posted the tweet.
+- The Twitter Followers Column represents the number of Followers the author has
+- The Checked columns means whether or not the author is verified.
+- The City columns represents where the author posted the tweet
+- The Gender column represents the sex of the author
+- The Impressions column represents the number of people who view the tweet.
+
+The resulting data frame had 15,000 rows and 10 columns.
+
+```{r}
+data <- rbind(data_1, data_2)
+data <- data[data$Language == 'en', ]
+print(data)
+```
+
+#Cleaning the Data
+
+To initially clean the data, we needed to remove all hyperlinks and add in document IDs to aid in future analysis.
+
+```{r}
+
+data$Title=str_replace_all(data$Title, "https://t.co/[A-Za-z\\d]+|https://[A-Za-z\\d]+|http://[A-Za-z\\d]+|&amp|@[A-Za-z\\d]+|&amp",'')
+
+data$doc_id <- 1:nrow(data)
+data$text <- data$Title
+
+df_corpus <- VCorpus(DataframeSource(data))
+
+```
+
+##Adding Sentiment Words
+
+We selected the NRC dictionary to conduct the sentiment analysis because it provided a more comprehensive word set and sentiment list. We included additionally words to the dictionary from the data set to better encapsulate words not included. These words were selected after reviewing each one in the context of the tweet.
+
+```{r}
+lexicon <- get_sentiments("nrc")
+lexicon <- lexicon %>%
+  bind_rows(tribble(~word, ~sentiment,
+                    "brazilwasstolen", "negative",
+                    "brazilianspring", "negative",
+                    "braziliancensorship", "negative",
+                    "sos", "negative",
+                    "braziliancensured", "negative",
+                    "bigbrother", "negative",
+                    "communiso", "negative",
+                    "lula", "negative",
+                    "luta", "negative",
+                    "revoltados", "negative",
+                    "brazilagainstcommunism", "negative",
+                    "authoritarian", "negative",
+                    "restricted", "negative",
+                    "suppressed", "negative",
+                    "protest", "negative",
+                    "protesting", "negative",
+                    "comunistas", "negative",
+                    "brazilwasstolen", "anger",
+                    "brazilianspring", "anger",
+                    "braziliancensorship", "anger",
+                    "sos", "fear",
+                    "braziliancensured", "anger",
+                    "communiso", "anger",
+                    "lula", "anger",
+                    "revoltados", "anger",
+                    "brazilagainstcommunism", "anger",
+                    "authoritarian", "anger",
+                    "restricted", "anger",
+                    "suppressed", "anger",
+                    "protest", "anger",
+                    "protesting", "anger",
+                    "comunistas", "anger",
+                    "brasília", "positive",
+                    "congresso", "negative",
+                    "ministério", "negative",
+                    "brasília", "positive",
+                    "festa", "positive",
+                    "tomado", "negative",
+                    "presid", "negative",
+                    "povo", "positive",
+                    "revoltado", "anger",
+                    "nacion", "positive",
+                    "patriota", "positive",
+                    "nbrazilspringsnbrazilianprotest", "negative",
+                    "invasão ", "negative"))
+```
+
+##Final Cleaning
+
+The final step of the cleaning process was to remove punctuation, lower the words, remove numbers, and to remove Portuguese and English stop words.
+
+Then, we transformed the corpus into relevant structures to be used in a word cloud to calculate the sentiment score and topic for each tweet.
+
+```{r}
+cleaned_corpus <- tm_map(df_corpus, removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removeWords, 
+         words = c("https", "t.co", "rt", "lula", "please", "brazil", "brazilian", stopwords('en'), stopwords('pt'))) #%>%
+  # tm_map(stemDocument, language = c("english"), lazy = TRUE)
+
+
+cleaned_df <- data.frame(text=unlist(sapply(cleaned_corpus, `[`, "content")), 
+    stringsAsFactors=F)
+cleaned_df$document_id <- 1:nrow(cleaned_df)
+
+tweets_dtm <- cleaned_df %>%
+  unnest_tokens(word, text) %>%
+  count(document_id, word) %>%
+  cast_dfm(document_id, word, n)
+
+tweets_wordcloud <- cleaned_df %>%
+  unnest_tokens(word, text) %>%
+  count(document_id, word) %>%
+  cast_tdm(document_id, word, n)
+
+tweets_sentiment <- cleaned_df %>%
+  unnest_tokens(word, text) %>%
+  inner_join(lexicon)
+
+```
+#Word Cloud
+
+Word clouds are great tools to visualize the most common words in a data set. For our analysis, we used the wordcloud2 library.
+
+```{r}
+# Convert the term-document matrix into a regular matrix
+m <- as.matrix(TermDocumentMatrix(cleaned_corpus))
+# Calculate the frequency of each word in the matrix
+word_freqs <- rowSums(m)
+
+
+# Create an interactable word cloud 
+wordcloud2(data = data.frame(word = names(word_freqs), freq = word_freqs), size = 1.5)
+```
+
+In the word cloud above, the size of each word reflects how common it is in the data set. Some of the biggest include "communist", "crime", and "revolt". These words are useful when for preliminary anaylsis of the data set.
+
+#Calculating Sentiment Score
+
+```{r}
+# This line counts the appearance of each word and arranges them in descending order
+wordCounts <- tweets_sentiment %>% 
+  count(word, sentiment) %>% 
+  arrange(desc(n))
+
+# This line adds a factored variable for the words so that the visualizations work
+wordCounts$factoredWords <- fct_reorder(wordCounts$word, wordCounts$n)
+
+# This subsets the wordCounts dataframe so that another visualization can be made with only three of the "ncr" sentiments
+wordCountsSubset <- sqldf("SELECT word, sentiment, n, factoredWords FROM wordCounts WHERE sentiment = 'anger' OR sentiment = 'negative' OR sentiment = 'positive'")
+
+# This graphic arranges the word counts in decreasing order by each sentiment
+ggplot(wordCounts[1:100, ], aes(factoredWords, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free") +
+  coord_flip() +
+  scale_y_continuous(breaks = trans_breaks(identity, identity, n = 3)) +
+  labs(title = "Sentiment Word Counts", x = "Words", y = "Count") + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 0.5),
+        axis.text.y = element_text(size = 5.7))
+
+# This graphic arranges the word counts in decreasing order by the anger, negative, and positive sentiments
+ggplot(wordCountsSubset[6:80, ], aes(factoredWords, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free") +
+  coord_flip() +
+  scale_y_continuous(breaks = trans_breaks(identity, identity, n = 3)) +
+  labs(title = "Sentiment Word Counts Without the Top Five Words", x = "Words", y = "Count") + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 0.5),
+        axis.text.y = element_text(size = 5.7))
+```
+
+
+Because the data was in a term-document matrix we need a way to find the sentiment within each tweet. As a result, we decided to take the average sentiment of each tweet. A score of negative one (-1) was assigned to a word if it was tagged with "fear", "negative", "anger", "disgust", or "sadness". Otherwise, a score of one (1) was assigned for the word. The average of all the sentiment tagged words was then added to a new column 'sent-score'. 
+
+```{r}
+calc_average_sent <- function(sent_df) {
+  sent_count <- c()
+  for (i in 1:nrow(sent_df)) {
+    if (sent_df$sentiment[i] =="fear" | sent_df$sentiment[i] == "negative" | sent_df$sentiment[i] == "anger" | sent_df$sentiment[i] == "disgust" | sent_df$sentiment[i] == "sadness") {
+      sent_count<- c(sent_count, -1)
+    } else {
+      sent_count<- c(sent_count, 1)
+    }
+  }
+  return(mean(sent_count))
+}
+
+add_sentient <- function(sent_df, original) {
+  # create a list of all tweets included with some form of sentiment
+  sent_temp <- sent_df$document_id
+  sent_temp <- sent_temp[!duplicated(sent_temp)]
+  
+  count_of_averages <- c()
+  # data frame to be returned 
+  sent_by_doc <- data.frame()
+  for (i in sent_temp) {
+    sent_tempo <- sent_df[sent_df$document_id == as.integer(i), ]
+    sent_score <- calc_average_sent(sent_tempo)
+
+    target <- as.data.frame(data[data$doc_id == i, ])
+    target$sent_score <- sent_score
+    sent_by_doc <- rbind(sent_by_doc, target)
+    
+  }
+  return(sent_by_doc)
+}
+
+final_sent <- add_sentient(tweets_sentiment, data)
+
+```
+
+#Topic Model
+##Selecting Optimal Number of Topics
+
+We need to compare the metrics of a number of different topics to find the optimal one for a data set. 4, 6, 8, 10, 12, 14, 16, 18, and 20 number of topics to provide a wide variety that would best suit the model.
+
+- Author's Note: the code for this section was found from: https://juliasilge.com/blog/evaluating-stm/
+
+
+```{r include=FALSE}
+many_models <- data_frame(K = c(4, 6, 8, 10, 12, 14, 16, 18, 20)) %>%
+  mutate(topic_model = future_map(K, ~stm(tweets_dtm, K = .,
+                                          verbose = FALSE)))
+```
+
+After running the topics, we have to extract the related metrics for analysis.
+
+```{r}
+heldout <- make.heldout(tweets_dtm)
+
+k_result <- many_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, tweets_dtm),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, tweets_dtm),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+```
+
+Now, we extract the relevant features and plot them for each number of topics, K.
+
+```{r}
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(mapping = aes(linetype = Metric), size = 1, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics") + theme_linedraw()
+```
+
+After viewing the graph, we can see the optimal number of topics for the data set is 14. To find the optimal number of topics you have to look at where the the likelihood reaches an apex and where the residuals bottoms out
+
+##Model with 14 Topics 
+
+```{r}
+topic_model <- k_result %>% 
+  filter(K == 14) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+```
+
+
+```{r}
+td_beta <- tidy(topic_model)
+
+td_beta %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  mutate(topic = paste0("Topic ", topic),
+         term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(term, beta, fill = as.factor(topic))) +
+  geom_col(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(x = NULL, y = expression(beta),
+       title = "Highest word probabilities for each topic",
+       subtitle = "Different words are associated with different topics")
+
+
+```
+The plot above shows the words most associated with each topic.
+
+
+###Adding the the Topics to the Original Data frame 
+
+```{r}
+tweet_documents <- tidy(topic_model, matrix = "gamma")
+
+temp <-tweet_documents$document
+temp <- temp[!duplicated(temp)]
+
+topic_by_doc <- data.frame()
+for (i in temp) {
+  tempo <- tweet_documents %>%
+    filter(document == i) %>%
+    arrange(desc(gamma))
+  target <- as.data.frame(final_sent[final_sent$doc_id == i, ])
+  if (length(rownames(target)) == 1) {
+    topic_row <- cbind(target, tempo[1, ])
+    topic_by_doc <- rbind(topic_by_doc, topic_row)
+  }
+
+}
+
+```
+
+#Map
+The final step to our process is to graph the sentiments and topics on a map to see if there are any trends.
+The first step was to randomly sample the data for 1000 instances so that it can be visualized better.
+```{r}
+loc_df <- topic_by_doc[!is.na(topic_by_doc$City), ]
+library(ggmap)
+set.seed(11)
+sampled_map_df <- sample(1:nrow(loc_df), 1000)
+sampled_map_df <- loc_df[sampled_map_df, ]
+```
+
+We then needed to collect the location data from the Google Maps API so that it can be plotted.
+
+```{r}
+ggmap::register_google(key = "AIzaSyBOeRyIeYfCoMr_KlEqM0h7HrNvdp7kvis")
+
+get_long_lat <- function(df) {
+  temp <- ggmap::geocode(df$City)
+  df$lon <- temp$lon
+  df$lat <- temp$lat
+  return(df)
+}
+
+final_df <- get_long_lat(sampled_map_df)
+```
+
+##World Map
+###World Map - Sentiment
+We first wanted to see if there were any clustered examples around the world.
+
+```{r}
+world_coordinates <- map_data("world")
+
+m <- ggplot() + 
+  geom_map(
+    data = world_coordinates, map = world_coordinates,
+    aes(long, lat, map_id = region),
+    color = "white", fill = "grey", size = 0.2
+  )
+
+world_sent <- m + geom_point(data=final_df, aes(lon, lat, alpha=0.3, color=sent_score), size = 2.5) +
+  scale_color_viridis_c(option = "A", direction = -1, name = "Sentiment Score") +
+  theme_linedraw() +
+  guides(alpha='none', size= "none") +
+  labs(
+    title = "Sentiment Score in a City - Brazil",
+    subtitle = "The Sentiment Score was calculated based on the average sentiment in a tweet.\nEach node on the graph reflects the city a tweet was made in.\nThe data was randomly sampled to include 1000 tweets."
+  ) + theme(
+    axis.title = element_blank(),
+    axis.text = element_blank()
+  )
+
+world_sent
+
+```
+
+As we can see from the map above, the data suggest that the overwhelming sentiment is negative around the world. However, there are occasionally neutral and positive sentiments in pockets on the graph.
+
+###World Map - Topic
+```{r}
+world_topic <- m + geom_point(data=final_df, aes(lon, lat, alpha=0.3, color=as.factor(topic)), size = 2.5) +
+  scale_color_viridis_d(option = "A", direction = -1, name = "Topic") +
+  theme_linedraw() +
+  guides(alpha='none', size= "none") +
+  labs(
+    title = "Topics By Tweet - World",
+    subtitle = "The topic of each tweet was decided using the Structured Topic Model algo.\nEach node on the graph reflects the city a tweet was made in.\nThe data was randomly sampled to include 1000 tweets."
+  ) + theme(
+    axis.title = element_blank(),
+    axis.text = element_blank()
+  )
+
+world_topic
+```
+
+The most common topics in the sample are topics 10-14, especially in Brazil. The top 4 words for topic 10 are fight, January, freedom, and revolt. 
+- Topic 11 has new, time, york, and fox, which are characteristics of News agencies. 
+- Topic 12 has empty, exist, fraud, and communist. 
+- Topic 13 has braslia, supporters, brazilwasstolen, and president.
+- Topic 14 sos, sosbrasil, foralula, sosbrazil, which were all hashtags.
+
+These topics help to expand our analysis  of what was going on in Brazil and see what the citizens were talking about.
+
+##Brazil
+Next, the group decided to zoom in Brazil to examine what was going on in-depth. The code below shows how we got Brazil on the map
+
+```{r}
+map <- ggmap::get_map(location = "Brazil", zoom=4, source = "stamen")
+
+Brazil <-
+  ggmap(
+    ggmap = map
+    , extent = "panel"
+    #  , base_layer
+    , maprange = FALSE
+    , legend = "right"
+    , padding = 0.02
+    , darken = c(0, "black")
+  )
+
+```
+
+###Brazil Sentiment
+```{r}
+ bra_sent <- Brazil + geom_point(data=final_df, aes(lon, lat, alpha=0.3, color=sent_score), size = 2.5) +
+  scale_color_viridis_c(option = "A", direction = -1, name = "Sentiment Score") +
+  theme_linedraw() +
+  guides(alpha='none', size= "none") +
+  labs(
+    title = "Sentiment Score in a City - Brazil",
+    subtitle = "The Sentiment Score was calculated based on the average sentiment in a tweet.\nEach node on the graph reflects the city a tweet was made in.\nThe data was randomly sampled to include 1000 tweets."
+  ) + theme(
+    axis.title = element_blank(),
+    axis.text = element_blank()
+  )
+
+bra_sent
+```
+By expanding the map, we can see the cities where the sentiments are clustered. There is a high number of tweets between Rio De Janeiro and Sao Palo, the capital. The sentiment scores in this region varies greatly. The most interesting aspect is that the sentiment falls between 0.5 and -0.5, indicating that that there are not extreme sentiments in the most populated regions.
+
+###Brazil Topic
+```{r}
+ bra_topic <- Brazil + geom_point(data=final_df, aes(lon, lat, alpha=0.3, color=as.factor(topic)), size = 2.5) +
+  scale_color_viridis_d(option = "A", direction = -1, name = "Topic") +
+  theme_linedraw() +
+  guides(alpha='none', size= "none") +
+  labs(
+    title = "Topics By Tweet - Brazil",
+    subtitle = "The topic of each tweet was decided using the Structured Topic Model algo.\nEach node on the graph reflects the city a tweet was made in.\nThe data was randomly sampled to include 1000 tweets."
+  ) + theme(
+    axis.title = element_blank(),
+    axis.text = element_blank()
+  )
+
+bra_topic
+
+```
+After taking a closer look at brazil, the analysis supports our earlier observations regarding the most common topics being 10-14. However, topic 2also occur somewhat frequently in the Rio De Janeiro and Sao Palo region..
+
+- Topic 2 has brazilianspring, shooting, we want the source code, and i stand with brazil, which are all hashtags.
+
+When looking at the top 4 words associated with topic 2, we can drive additional insights about the brazilian citizens are saying.
+
+#Conclusion
+##Goal of the Research
+Our goal of text mining was to drive more insight about what the overall sentiments and topics were in Brazil and the world. Our analysis showed interesting trends that occurred in the data.
+
+One of the most interesting findings shows that the sentiments in the most populated regions of Brazil were not on any extreme end of the spectrum. This result was in contrast to our original idea that these highly populated regions would have more extreme sentiments, especially because they were closer to the epicenter of the revolts.
+
+Additionally, we found that areas outside of Brazil had very extreme sentiments. For example, Florida had extremely high sentiment scores and topics that reflected ones in Brazil.
+
+##Why Our Research is Important
+One of the biggest ideas behind our research is how sentiment and information can propagate online. The biggest example of this phenomenon is how tweets posted in Florida have the similar sentiment and topics as those in Brazil. This can most likely be explained by large amounts of Brazilians living in the state.
+
+We can conclude that the information traveled between continents because Brazilians living in Florida either interacted (either retweeted, replied, or quoted) with tweets from Brazil or generated their own content around the riots.
+
+Additionally, the framework conducted in this test can be applied to other real-world events, such as the Election Riots that happened in Washington D.C. in 2021. The framework can help drive a better picture of what was being talked about during these events.
+
+##Final Thoughts
+It would be interesting to add additional variables to the topic model, such as the sentiment score or location, to their effects on how topics are generated. This additional step would help drive further analysis and provide a better topic model to explain what individuals are talking about.
+
+
+
