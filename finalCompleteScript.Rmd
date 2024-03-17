@@ -379,7 +379,7 @@ sampled_map_df <- loc_df[sampled_map_df, ]
 We then needed to collect the location data from the Google Maps API so that it can be plotted.
 
 ```{r}
-ggmap::register_google(key = "AIzaSyBOeRyIeYfCoMr_KlEqM0h7HrNvdp7kvis")
+ggmap::register_google(key = "###REDACTED###")
 
 get_long_lat <- function(df) {
   temp <- ggmap::geocode(df$City)
